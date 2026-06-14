@@ -167,6 +167,14 @@ def serve_file(slug: str, filename: str):
     abort(404)
 
 
+@app.route("/iptv.m3u")
+def serve_m3u():
+    try:
+        return Response(open(M3U_PATH).read(), mimetype="audio/x-mpegurl")
+    except OSError:
+        abort(404)
+
+
 @app.route("/health")
 def health():
     with _lock:
