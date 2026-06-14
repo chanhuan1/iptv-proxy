@@ -1,18 +1,29 @@
 # 飞牛 IPTV 代理
 
-将运营商 RTSP 直播源实时转码为 HLS 流，让飞牛影视可以直接播放 IPTV 频道。
+将运营商 RTSP 直播源实时转码为 HLS 流，让飞牛影视内外网均可播放 IPTV 频道。
+
+## 特性
+
+- **按需转码** — 点播时才启动 ffmpeg，不看自动释放，节省 NAS 资源
+- **M3U 热加载** — 编辑频道文件秒级生效，无需重启容器
+- **URL 导入** — 支持飞牛 URL 导入方式，改完频道列表刷新即可
+- **死源保护** — RTSP 源连接超时自动跳过，不阻塞其他频道
+- **台标支持** — 支持 tvg-logo，飞牛可自动拉取频道图标
+- **生产级服务** — Waitress WSGI 服务器，比 Flask 开发服务器更稳定
+- **并发控制** — 最多同时转码 3 个频道（可调），CPU 内存有硬上限
+- **日志输出** — 启动信息和 ffmpeg 启停事件可查看
 
 ## 背景
 
 国内运营商 IPTV 直播源通常是 **RTSP 协议 + MPEG-2 编码**，而飞牛影视只支持 **HTTP/HLS 协议 + H.264 编码**，无法直接播放。
 
-本代理在收到飞牛的播放请求时自动启动 ffmpeg，将 RTSP 流转码为 HLS 切片并通过 HTTP 输出，飞牛拿到 HTTP 地址就能直接播放。频道不看了之后自动关闭转码释放资源。
+本代理在收到飞牛的播放请求时自动启动 ffmpeg，将 RTSP 流转码为 HLS 切片并通过 HTTP 输出。配合反向代理可实现内外网统一播放。
 
 ## 前提条件
 
 - 一台能跑 Docker 的 NAS 或服务器
 - 已安装飞牛影视
-- 有可用的运营商 IPTV 直播源（重庆联通已验证）
+- 有可用的运营商 IPTV 直播源
 
 ## 第一步：获取频道数据
 
@@ -20,9 +31,7 @@
 
 ### 1. 生成 channels.json
 
-访问运营商的 IPTV JSON 接口（类似 `http://<运营商IP>:8081/service/<账号>.json`），例如：
-
-将返回的 JSON 保存为 `channels.json`。格式要求：
+从运营商 IPTV 接口获取 JSON（类似 `http://<运营商IP>:8081/service/<账号>.json`），保存为 `channels.json`。格式要求：
 
 ```json
 [
@@ -39,34 +48,33 @@ M3U 文件决定飞牛影视里显示哪些频道。格式：
 
 ```
 #EXTM3U
-#EXTINF:-1 tvg-name="CCTV1" group-title="央视频道",CCTV-1高清
+#EXTINF:-1 tvg-name="CCTV1" tvg-logo="http://epg.51zmt.top:8000/tb1/CCTV/CCTV1.png" group-title="央视频道",CCTV-1高清
 http://NAS_IP:18888/ch1/index.m3u8
-#EXTINF:-1 tvg-name="CCTV2" group-title="央视频道",CCTV-2高清
-http://NAS_IP:18888/ch2/index.m3u8
 ```
 
 - `ch1` 对应 `channels.json` 里 `id` 为 1 的频道
 - `group-title` 控制飞牛影视里的分组
-- IP 地址改为你 NAS 的 IP
+- `tvg-logo` 指定频道台标（可选）
+- IP 地址改为你 NAS 的 IP 或反向代理域名
 
-项目里的 `generate_m3u.py` 可以根据 `channels.json` 自动生成 M3U：
+项目里的 `generate_m3u.py` 可自动生成 M3U：
 
 ```bash
 python3 generate_m3u.py
 ```
 
-## 第二步：部署到飞牛 NAS
+## 第二步：部署
 
-在飞牛 NAS 上创建一个目录（如 `/vol1/1000/docker/iptv-proxy`），放入以下三个文件：
+在 NAS 上创建目录，放入三个文件：
 
 ```
 iptv-proxy/
-├── channels.json          # RTSP 地址库
-├── iptv_channels.m3u      # 频道列表
-└── docker-compose.yml     # 部署配置
+├── channels.json
+├── iptv_channels.m3u
+└── docker-compose.yml
 ```
 
-`docker-compose.yml` 内容：
+`docker-compose.yml`：
 
 ```yaml
 services:
@@ -80,48 +88,71 @@ services:
       - ./iptv_channels.m3u:/app/iptv_channels.m3u:ro
 ```
 
-在飞牛 Docker 中导入 compose 并启动容器。
+启动容器。
 
 ## 第三步：导入飞牛影视
 
-1. 打开飞牛影视 → 设置 → 电视直播
-2. 添加直播源，选择 **文件导入**
-3. 上传 `iptv_channels.m3u`
-4. 导入成功后会显示频道列表，点击即可播放
+**方式一：URL 导入（推荐）**
+
+添加直播源 → URL 导入，填入：
+
+```
+http://NAS_IP:18888/iptv.m3u
+```
+
+改了频道列表后飞牛刷新即可。
+
+**方式二：文件导入**
+
+上传 `iptv_channels.m3u` 文件。
 
 ## 管理频道
 
-部署后想增删频道，直接编辑 NAS 上的 `iptv_channels.m3u` 文件：
+直接编辑 NAS 上的 `iptv_channels.m3u`：
 
 - **删除频道**：删掉对应的 `#EXTINF` 行和下一行 URL
-- **添加频道**：按上述格式新增两条，URL 中的 `chXX` 必须对应 `channels.json` 里的 ID
+- **添加频道**：新增两条，URL 中的 `chXX` 必须对应 `channels.json` 里的 ID
 - **改名改分组**：修改 `tvg-name` 和 `group-title`
 
-代理会自动检测文件变化，无需重启容器。
+代理自动检测文件变化，无需重启。
 
-> 如果新加频道在 `channels.json` 中不存在对应的 RTSP 地址，则无法播放。
+> 新加频道在 `channels.json` 中必须有对应的 RTSP 地址，否则无法播放。
 
-## 进一步配置
+## 查看日志
 
-编辑 `app.py` 中的以下变量（需要重新构建镜像）：
+```bash
+docker logs fntv-iptv-proxy
+```
 
-| 变量 | 默认值 | 说明 |
+正常输出示例：
+
+```
+14:30:01 Starting IPTV Proxy — 189 channels in DB, 3 active in M3U
+14:30:01 Listening on http://0.0.0.0:18888
+14:30:01 M3U: http://NAS_IP:18888/iptv.m3u
+14:30:15 Starting ffmpeg for ch1
+14:32:00 Stopping ffmpeg for ch1
+```
+
+## 配置参数
+
+| 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `IDLE_TIMEOUT` | 30 | 频道没人看后多少秒关闭转码 |
-| `MAX_CONCURRENT` | 3 | 最多同时转码几个频道 |
-| `-crf` | 28 | 画质参数，越小越清晰但 CPU 越高 |
+| `IDLE_TIMEOUT` | 30 秒 | 频道空闲后关闭转码 |
+| `MAX_CONCURRENT` | 3 | 最大同时转码数 |
+| `-crf` | 20 | 画质（越小越清晰，CPU 越高） |
 | `-threads` | 1 | 编码线程数 |
 
 ## 故障排查
 
 **导入 M3U 提示格式不正确**
-检查 M3U 里的 URL 是否以 `http://` 开头，飞牛不支持 `rtsp://`。
+检查 URL 是否以 `http://` 或 `https://` 开头，飞牛不支持 `rtsp://`。
 
 **频道列表正常但无法播放**
-确认代理容器已启动且正常运行。浏览器访问 `http://NAS_IP:18888/health` 检查。
+执行 `docker logs fntv-iptv-proxy` 查看是否有 ffmpeg 启动日志。无日志则说明 M3U 或 channels.json 配置有问题。
 
 **播放卡顿**
-NAS 性能不足。尝试降低 `MAX_CONCURRENT` 到 2 或 1，或调高 `-crf`（如 30）。
+降低 `MAX_CONCURRENT` 到 2 或 1，或调高 `-crf`（如 26）。
 
 **CPU/内存占用高**
-正常：每个频道转码约占用 5-15% CPU（弱 NAS）和 80MB 内存。换台后 30 秒自动释放，或降低 `MAX_CONCURRENT`。
+每个频道约占用 5-15% CPU 和 80MB 内存。换台后 30 秒自动释放。
