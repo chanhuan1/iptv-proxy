@@ -72,7 +72,6 @@ def _start_ffmpeg(slug: str, rtsp_url: str):
         "-rtsp_transport", "tcp",
         "-rtsp_flags", "prefer_tcp",
         "-timeout", "5000000",
-        "-stimeout", "3000000",
         "-analyzeduration", "500K",
         "-probesize", "500K",
         "-i", rtsp_url,
