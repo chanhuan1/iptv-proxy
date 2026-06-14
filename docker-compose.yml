@@ -1,0 +1,9 @@
+services:
+  iptv-proxy:
+    image: chanhuan01/fntv-iptv-proxy:latest
+    container_name: iptv-proxy
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./channels.json:/app/channels.json:ro
+      - ./iptv_channels.m3u:/app/iptv_channels.m3u:ro
