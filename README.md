@@ -42,53 +42,31 @@ flowchart LR
 - 已安装飞牛影视
 - 有可用的运营商 IPTV 直播源
 
-## 第一步：获取频道数据
+## 第一步：准备频道文件
 
-需要准备两个文件：
-
-| 文件 | 作用 | 必填 |
-|------|------|------|
-| `channels.json` | RTSP 地址映射（ch1 → rtsp://...） | 是 |
-| `iptv_channels.m3u` | 飞牛显示的频道列表 | 是 |
-
-### 1. 创建 channels.json
-
-`channels.json` 是频道 ID 到 RTSP 地址的映射表，代理靠它知道 ch1、ch2 分别对应哪个 RTSP 源。
-
-如果你有 JSON 格式的 IPTV 源数据（或从运营商接口获取），直接保存即可。如果没有，可以从现有 M3U 文件手动整理，格式如下：
-
-```json
-[
-  {"id": 1, "name": "CCTV-1高清", "url": "rtsp://..."},
-  {"id": 2, "name": "CCTV-2高清", "url": "rtsp://..."}
-]
-```
-
-> 每个频道必须有唯一的数字 `id`。
-
-### 2. 创建 iptv_channels.m3u
-
-M3U 文件决定飞牛影视里显示哪些频道。格式：
+只需一个文件 `iptv_channels.m3u`，包含你的所有 IPTV 频道，直接写 RTSP 地址即可：
 
 ```
 #EXTM3U
-#EXTINF:-1 tvg-name="CCTV1" tvg-logo="http://epg.51zmt.top:8000/tb1/CCTV/CCTV1.png" group-title="央视频道",CCTV-1高清
-http://NAS_IP:18888/ch1/index.m3u8
+#EXTINF:-1 tvg-name="CCTV-1高清" tvg-logo="http://epg.51zmt.top:8000/tb1/CCTV/CCTV1.png" group-title="央视频道",CCTV-1高清
+rtsp://123.147.xxx.xxx/xxxxxx
+#EXTINF:-1 tvg-name="CCTV-2高清" tvg-logo="http://epg.51zmt.top:8000/tb1/CCTV/CCTV2.png" group-title="央视频道",CCTV-2高清
+rtsp://123.147.xxx.xxx/xxxxxx
 ```
 
-- `ch1` 对应 `channels.json` 里 `id` 为 1 的频道
-- `group-title` 控制飞牛里的分组，`tvg-logo` 指定台标（可选）
-- IP 改为你 NAS 的 IP 或反向代理域名
+- `tvg-name` 和 `group-title` 控制飞牛里的显示名称和分组
+- `tvg-logo` 指定台标（可选，不填也可以）
+- 下一行直接写 RTSP 地址
+- 代理会自动分配 `ch1`、`ch2`…… 无需手动编号
 
-如果你已有 M3U 格式的频道列表（含 RTSP 地址），只需把 RTSP 直链替换为代理 URL 格式即可。
+> 文件编码为 UTF-8，`channels.json` 不再需要。
 
 ## 第二步：部署
 
-在 NAS 上创建目录，放入三个文件：
+在 NAS 上创建目录，放入两个文件：
 
 ```
 iptv-proxy/
-├── channels.json
 ├── iptv_channels.m3u
 └── docker-compose.yml
 ```
@@ -103,7 +81,6 @@ services:
     restart: unless-stopped
     network_mode: host
     volumes:
-      - ./channels.json:/app/channels.json:ro
       - ./iptv_channels.m3u:/app/iptv_channels.m3u:ro
 ```
 
@@ -130,12 +107,10 @@ http://NAS_IP:18888/iptv.m3u
 直接编辑 NAS 上的 `iptv_channels.m3u`：
 
 - **删除频道**：删掉对应的 `#EXTINF` 行和下一行 URL
-- **添加频道**：新增两条，URL 中的 `chXX` 必须对应 `channels.json` 里的 ID
+- **添加频道**：新增 `#EXTINF` 行和下一行 RTSP 地址，代理自动分配新 slug
 - **改名改分组**：修改 `tvg-name` 和 `group-title`
 
 代理自动检测文件变化，无需重启。
-
-> 新加频道在 `channels.json` 中必须有对应的 RTSP 地址，否则无法播放。
 
 ## 查看日志
 
@@ -168,7 +143,7 @@ docker logs fntv-iptv-proxy
 检查 URL 是否以 `http://` 或 `https://` 开头，飞牛不支持 `rtsp://`。
 
 **频道列表正常但无法播放**
-执行 `docker logs fntv-iptv-proxy` 查看是否有 ffmpeg 启动日志。无日志则说明 M3U 或 channels.json 配置有问题。
+执行 `docker logs fntv-iptv-proxy` 查看是否有 ffmpeg 启动日志。无日志则说明 M3U 文件格式有问题。
 
 **播放卡顿**
 降低 `MAX_CONCURRENT` 到 2 或 1，或调高 `-crf`（如 26）。

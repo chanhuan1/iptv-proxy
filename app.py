@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import re
@@ -18,36 +17,58 @@ log = logging.getLogger("iptv")
 
 app = Flask(__name__)
 
-# RTSP URL database: slug → {name, url}
-with open("channels.json") as f:
-    RTSP_DB = {f"ch{ch['id']}": ch for ch in json.load(f)}
-
-# Active channels parsed from user-editable M3U
 M3U_PATH = "iptv_channels.m3u"
 _m3u_mtime = 0.0
-_active_slugs: set[str] = set()
+_channels: list[dict] = []          # ordered list of {slug, name, url, extras}
+_RTSP: dict[str, str] = {}          # slug → rtsp_url
 
 
-def _parse_m3u_slugs(path: str) -> set[str]:
-    slugs: set[str] = set()
+def _parse_m3u(path: str) -> list[dict]:
+    """Parse an M3U file with RTSP URLs, auto-assign ch1/ch2... slugs."""
+    channels: list[dict] = []
     with open(path) as f:
-        for line in f:
-            m = re.search(r"/(ch\d+)/index\.m3u8", line)
-            if m:
-                slugs.add(m.group(1))
-    return slugs
+        lines = f.readlines()
+
+    idx = 0
+    for i, line in enumerate(lines):
+        if not line.startswith("#EXTINF:"):
+            continue
+        extras: dict[str, str] = {}
+        for attr in ["tvg-name", "tvg-logo", "group-title", "tvg-id"]:
+            m = re.search(rf'{attr}="([^"]*)"', line)
+            if m and m.group(1):
+                extras[attr] = m.group(1)
+        comma = line.rfind(",")
+        display = line[comma + 1:].strip() if comma >= 0 else ""
+
+        if i + 1 >= len(lines):
+            continue
+        url = lines[i + 1].strip()
+        if not (url.startswith("rtsp://") or url.startswith("http://")):
+            continue
+
+        idx += 1
+        channels.append({
+            "slug": f"ch{idx}",
+            "name": display or extras.get("tvg-name", ""),
+            "url": url,
+            "extras": extras,
+        })
+    return channels
 
 
-def _get_active_slugs() -> set[str]:
-    global _m3u_mtime, _active_slugs
+def _reload_if_changed():
+    global _m3u_mtime, _channels, _RTSP
     try:
         mtime = os.stat(M3U_PATH).st_mtime
     except OSError:
-        return _active_slugs
-    if mtime != _m3u_mtime:
-        _active_slugs = _parse_m3u_slugs(M3U_PATH)
-        _m3u_mtime = mtime
-    return _active_slugs
+        return
+    if mtime == _m3u_mtime:
+        return
+    _channels = _parse_m3u(M3U_PATH)
+    _RTSP = {ch["slug"]: ch["url"] for ch in _channels}
+    _m3u_mtime = mtime
+    log.info("M3U reloaded: %d channels", len(_channels))
 
 
 HLS_DIR = Path("/tmp/hls")
@@ -109,7 +130,7 @@ def _touch(slug: str):
                 oldest = min((s for s in _last_access if s in _procs), key=lambda s: _last_access[s])
                 _kill_proc(oldest)
             log.info("Starting ffmpeg for %s", slug)
-            _procs[slug] = _start_ffmpeg(slug, RTSP_DB[slug]["url"])
+            _procs[slug] = _start_ffmpeg(slug, _RTSP[slug])
 
 
 def _cleanup_idle():
@@ -138,12 +159,11 @@ def _kill_proc(slug: str):
 
 def _wait_playlist(slug: str) -> bytes:
     playlist = HLS_DIR / slug / "index.m3u8"
-    for i in range(50):  # 10s max
+    for i in range(50):
         if playlist.exists():
             content = playlist.read_bytes()
             if b"#EXTINF:" in content:
                 return content
-        # If ffmpeg died, source is dead — stop waiting
         if i > 0 and i % 5 == 0:
             with _lock:
                 p = _procs.get(slug)
@@ -155,11 +175,34 @@ def _wait_playlist(slug: str) -> bytes:
     return EMPTY
 
 
+def _generate_proxy_m3u() -> str:
+    """Generate a proxy-format M3U from the parsed channels."""
+    lines = ['#EXTM3U x-tvg-url="http://epg.51zmt.top:800/e.xml"']
+    for ch in _channels:
+        ext = ch["extras"]
+        parts = ['#EXTINF:-1']
+        if ext.get("tvg-name"):
+            parts.append(f'tvg-name="{ext["tvg-name"]}"')
+        logo = ext.get("tvg-logo", "")
+        parts.append(f'tvg-logo="{logo}"')
+        group = ext.get("group-title", "")
+        parts.append(f'group-title="{group}"')
+        parts.append(f',{ch["name"]}')
+        lines.append(" ".join(parts))
+        lines.append(f"http://NAS_IP:18888/{ch['slug']}/index.m3u8")
+        lines.append("")
+    return "\n".join(lines)
+
+
+# ── Routes ──────────────────────────────────────────────
+
+
 @app.route("/<slug>/<filename>")
 def serve_file(slug: str, filename: str):
     _cleanup_idle()
+    _reload_if_changed()
 
-    if slug not in _get_active_slugs() or slug not in RTSP_DB:
+    if slug not in _RTSP:
         abort(404)
 
     _touch(slug)
@@ -176,10 +219,8 @@ def serve_file(slug: str, filename: str):
 
 @app.route("/iptv.m3u")
 def serve_m3u():
-    try:
-        return Response(open(M3U_PATH).read(), mimetype="audio/x-mpegurl")
-    except OSError:
-        abort(404)
+    _reload_if_changed()
+    return Response(_generate_proxy_m3u(), mimetype="audio/x-mpegurl")
 
 
 @app.route("/health")
@@ -190,7 +231,8 @@ def health():
 
 @app.route("/")
 def index():
-    return f"<h1>IPTV Proxy</h1><p>{len(_get_active_slugs())} active / {len(RTSP_DB)} total</p>"
+    _reload_if_changed()
+    return f"<h1>IPTV Proxy</h1><p>{len(_channels)} channels</p>"
 
 
 def _cleanup_loop():
@@ -202,8 +244,8 @@ def _cleanup_loop():
 threading.Thread(target=_cleanup_loop, daemon=True).start()
 
 if __name__ == "__main__":
-    log.info("Starting IPTV Proxy — %d channels in DB, %d active in M3U",
-             len(RTSP_DB), len(_get_active_slugs()))
+    _reload_if_changed()
+    log.info("Starting IPTV Proxy — %d channels", len(_channels))
     log.info("Listening on http://0.0.0.0:18888")
     log.info("M3U: http://NAS_IP:18888/iptv.m3u")
     serve(app, host="0.0.0.0", port=18888)

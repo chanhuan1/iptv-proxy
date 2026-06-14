@@ -5,7 +5,7 @@ RUN apk add --no-cache python3 py3-pip ffmpeg x264-libs && \
 
 WORKDIR /app
 COPY app.py .
-# channels.json and iptv_channels.m3u must be mounted at runtime
+# iptv_channels.m3u must be mounted at runtime
 
 EXPOSE 18888
 
