@@ -44,11 +44,18 @@ flowchart LR
 
 ## 第一步：获取频道数据
 
-需要准备两个文件：`channels.json`（RTSP 地址库）和 `iptv_channels.m3u`（频道列表）。
+需要准备两个文件：
 
-### 1. 生成 channels.json
+| 文件 | 作用 | 必填 |
+|------|------|------|
+| `channels.json` | RTSP 地址映射（ch1 → rtsp://...） | 是 |
+| `iptv_channels.m3u` | 飞牛显示的频道列表 | 是 |
 
-从运营商 IPTV 接口获取 JSON（类似 `http://<运营商IP>:8081/service/<账号>.json`），保存为 `channels.json`。格式要求：
+### 1. 创建 channels.json
+
+`channels.json` 是频道 ID 到 RTSP 地址的映射表，代理靠它知道 ch1、ch2 分别对应哪个 RTSP 源。
+
+如果你有 JSON 格式的 IPTV 源数据（或从运营商接口获取），直接保存即可。如果没有，可以从现有 M3U 文件手动整理，格式如下：
 
 ```json
 [
@@ -57,9 +64,9 @@ flowchart LR
 ]
 ```
 
-> 每个频道必须有唯一的数字 `id`，`url` 是 RTSP 地址。
+> 每个频道必须有唯一的数字 `id`。
 
-### 2. 生成 iptv_channels.m3u
+### 2. 创建 iptv_channels.m3u
 
 M3U 文件决定飞牛影视里显示哪些频道。格式：
 
@@ -70,15 +77,10 @@ http://NAS_IP:18888/ch1/index.m3u8
 ```
 
 - `ch1` 对应 `channels.json` 里 `id` 为 1 的频道
-- `group-title` 控制飞牛影视里的分组
-- `tvg-logo` 指定频道台标（可选）
-- IP 地址改为你 NAS 的 IP 或反向代理域名
+- `group-title` 控制飞牛里的分组，`tvg-logo` 指定台标（可选）
+- IP 改为你 NAS 的 IP 或反向代理域名
 
-项目里的 `generate_m3u.py` 可自动生成 M3U：
-
-```bash
-python3 generate_m3u.py
-```
+如果你已有 M3U 格式的频道列表（含 RTSP 地址），只需把 RTSP 直链替换为代理 URL 格式即可。
 
 ## 第二步：部署
 
